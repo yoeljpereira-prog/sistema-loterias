@@ -241,6 +241,81 @@ def pagar_ticket():
     return jsonify({"ok": True, "total_pagado": total_pagado, "jugadas_pagadas": len(jugadas_ganadoras)})
 
 
+@app.post("/bloqueos")
+def crear_bloqueo():
+    data = request.get_json()
+    db = get_db()
+    cur = db.execute(
+        """INSERT INTO bloqueos_limites (nivel, nivel_id, loteria_id, sorteo_id, numero, tipo, monto_limite)
+           VALUES (?,?,?,?,?,?,?)""",
+        (
+            data["nivel"],
+            data["nivel_id"],
+            data["loteria_id"],
+            data.get("sorteo_id"),
+            data["numero"],
+            data["tipo"],
+            data.get("monto_limite"),
+        ),
+    )
+    db.commit()
+    return jsonify({"bloqueo_id": cur.lastrowid}), 201
+
+
+@app.get("/bloqueos")
+def listar_bloqueos():
+    nivel = request.args.get("nivel")
+    nivel_id = request.args.get("nivel_id")
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM bloqueos_limites WHERE nivel = ? AND nivel_id = ?", (nivel, nivel_id)
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.delete("/bloqueos/<int:bloqueo_id>")
+def quitar_bloqueo(bloqueo_id):
+    db = get_db()
+    db.execute("DELETE FROM bloqueos_limites WHERE id = ?", (bloqueo_id,))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+def _validar_bloqueos_y_limites(db, agencia_id, sorteo_id, numero_jugado, monto):
+    """
+    Revisa si un número está bloqueado o si supera el límite permitido
+    para ese sorteo, tanto a nivel de agencia como del banquero que la
+    administra. Devuelve un mensaje de error, o None si está todo bien.
+    """
+    sorteo = db.execute("SELECT loteria_id FROM sorteos WHERE id = ?", (sorteo_id,)).fetchone()
+    if sorteo is None:
+        return "Sorteo no encontrado"
+    loteria_id = sorteo["loteria_id"]
+
+    agencia = db.execute("SELECT banquero_id FROM agencias WHERE id = ?", (agencia_id,)).fetchone()
+    banquero_id = agencia["banquero_id"] if agencia else None
+
+    reglas = db.execute(
+        """SELECT tipo, monto_limite FROM bloqueos_limites
+           WHERE numero = ? AND loteria_id = ? AND (sorteo_id = ? OR sorteo_id IS NULL)
+           AND ((nivel = 'agencia' AND nivel_id = ?) OR (nivel = 'banquero' AND nivel_id = ?))""",
+        (numero_jugado, loteria_id, sorteo_id, agencia_id, banquero_id),
+    ).fetchall()
+
+    for regla in reglas:
+        if regla["tipo"] == "bloqueado":
+            return f"El número {numero_jugado} está bloqueado para este sorteo"
+        if regla["tipo"] == "limite":
+            ya_vendido = db.execute(
+                "SELECT COALESCE(SUM(monto), 0) AS total FROM jugadas WHERE sorteo_id = ? AND numero_jugado = ?",
+                (sorteo_id, numero_jugado),
+            ).fetchone()["total"]
+            if ya_vendido + monto > regla["monto_limite"]:
+                disponible = max(regla["monto_limite"] - ya_vendido, 0)
+                return f"El número {numero_jugado} solo admite {disponible} más en este sorteo (límite {regla['monto_limite']})"
+    return None
+
+
 @app.get("/")
 def inicio():
     return jsonify({"mensaje": "Sistema de Loterías funcionando", "estado": "ok"})
@@ -312,6 +387,11 @@ def crear_venta():
     caja = db.execute("SELECT agencia_id FROM cajas WHERE id = ?", (caja_id,)).fetchone()
     if caja is None:
         return jsonify({"error": "Caja no encontrada"}), 404
+
+    for j in jugadas:
+        error_bloqueo = _validar_bloqueos_y_limites(db, caja["agencia_id"], j["sorteo_id"], j["numero_jugado"], j["monto"])
+        if error_bloqueo:
+            return jsonify({"error": error_bloqueo}), 409
 
     total = sum(j["monto"] for j in jugadas)
     numero_ticket = str(secrets.randbelow(900000000) + 100000000)
