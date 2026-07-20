@@ -84,6 +84,75 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+@app.get("/demo/seed")
+def demo_seed():
+    """
+    Endpoint TEMPORAL solo para pruebas: crea un banquero, una agencia
+    y una caja de ejemplo si no existen todavía, con credenciales fijas
+    para poder probar login/ventas sin tener el panel administrador
+    conectado aún.
+    """
+    db = get_db()
+    existente = db.execute("SELECT id FROM usuarios WHERE usuario = 'caja1demo'").fetchone()
+    if existente:
+        return jsonify({"mensaje": "Los datos de prueba ya existen", "usuario": "caja1demo"})
+
+    clave_hash = hash_password("clave123")
+
+    cur = db.execute(
+        "INSERT INTO usuarios (nombre, usuario, password_hash, rol) VALUES (?,?,?,?)",
+        ("Admin Demo", "admindemo", clave_hash, "agencia"),
+    )
+    usuario_admin_id = cur.lastrowid
+
+    cur = db.execute(
+        "INSERT INTO usuarios (nombre, usuario, password_hash, rol) VALUES (?,?,?,?)",
+        ("Banquero Demo", "banquerodemo", clave_hash, "banquero"),
+    )
+    usuario_banquero_id = cur.lastrowid
+
+    cur = db.execute(
+        "INSERT INTO banqueros (usuario_id, comision_sistema_pct) VALUES (?, 15)",
+        (usuario_banquero_id,),
+    )
+    banquero_id = cur.lastrowid
+
+    cur = db.execute(
+        "INSERT INTO agencias (banquero_id, usuario_admin_id, nombre, comision_pct) VALUES (?,?,?,?)",
+        (banquero_id, usuario_admin_id, "AGENCIA DEMO", 8),
+    )
+    agencia_id = cur.lastrowid
+
+    cur = db.execute(
+        "INSERT INTO usuarios (nombre, usuario, password_hash, rol) VALUES (?,?,?,?)",
+        ("Caja Demo", "caja1demo", clave_hash, "caja"),
+    )
+    usuario_caja_id = cur.lastrowid
+
+    cur = db.execute(
+        "INSERT INTO cajas (agencia_id, usuario_id, nombre_caja) VALUES (?,?,?)",
+        (agencia_id, usuario_caja_id, "Caja 1"),
+    )
+    caja_id = cur.lastrowid
+
+    db.commit()
+
+    return jsonify({
+        "mensaje": "Datos de prueba creados",
+        "usuario_login": "caja1demo",
+        "password": "clave123",
+        "caja_id": caja_id,
+        "agencia_id": agencia_id,
+    })
+
+Guarda con "Commit changes", espera 2-3 minutos a que Render vuelva a desplegar, y avísame cuando esté listo.
+
+Mientras tanto, descarga el archivo probador_sistema.html que te acabo de compartir arriba — ábrelo haciendo doble clic (se abre directo en tu navegador, no necesita servidor). Ahí vas a pegar la dirección de tu servidor de Render arriba del todo, y luego ir presionando los botones en orden: 1, 2, 3, 4, 5, 6.
+
+Probador sistema
+Código · HTML 
+
+
 @app.get("/")
 def inicio():
     return jsonify({"mensaje": "Sistema de Loterías funcionando", "estado": "ok"})
