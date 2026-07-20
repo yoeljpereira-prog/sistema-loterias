@@ -65,6 +65,20 @@ app = Flask(__name__)
 inicializar_si_hace_falta()
 
 
+@app.after_request
+def agregar_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+
+@app.before_request
+def manejar_preflight():
+    if request.method == "OPTIONS":
+        return jsonify({"ok": True}), 200
+        
+
 def get_db():
     if "db" not in g:
         g.db = sqlite3.connect(DB_PATH)
