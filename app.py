@@ -12,7 +12,57 @@ from motor_premios import procesar_resultado, reversar_resultado
 
 DB_PATH = "loterias.db"
 
+LOTERIAS_CATALOGO = [
+    ("LOTTO ACTIVO", 38, 30, 0, None, None),
+    ("LA GRANJITA", 38, 30, 0, None, None),
+    ("SELVA PLUS", 38, 30, 0, None, None),
+    ("GUACHARO ACTIVO", 77, 60, 0, "75", 120),
+    ("GUACHARITO MILLONARIO", 102, 70, 5, "99", 140),
+    ("CHANCE ANIMALITO", 38, 30, 0, None, None),
+    ("LOTTOREY", 38, 30, 0, None, None),
+    ("LOTTOINTERNACIONAL", 38, 30, 0, None, None),
+    ("TERMINALITO", 100, 70, 0, None, None),
+    ("ANIMALITOS LA RICACHONA", 38, 30, 0, None, None),
+    ("TRIOACTIVO", 1000, 600, 0, None, None),
+    ("TERMINAL TRIO ACTIVO", 100, 70, 5, None, None),
+    ("TRIPLE LA RICACHONA", 1000, 600, 0, None, None),
+    ("TERMINAL LA RICACHONA", 100, 70, 5, None, None),
+    ("TRIPLETA LOTTO ACTIVO", 0, 50, 0, None, None),
+    ("TRIPLETA LA GRANJITA", 0, 50, 0, None, None),
+    ("TRIPLETA SELVA PLUS", 0, 50, 0, None, None),
+    ("TRIPLETA GUACHARO", 0, 100, 0, None, None),
+]
+
+
+def inicializar_si_hace_falta():
+    """
+    Se asegura de que la base de datos exista y tenga las tablas y el
+    catálogo cargado. Corre cada vez que arranca la aplicación, para
+    no depender de que el archivo sobreviva entre reinicios del
+    servidor (importante en planes gratuitos con disco temporal).
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='loterias'")
+    ya_existe = cur.fetchone() is not None
+
+    if not ya_existe:
+        with open("schema.sql") as f:
+            con.executescript(f.read())
+        cur.executemany(
+            "INSERT INTO loterias (nombre, cantidad_numeros, pago_normal, pago_aproximacion, numero_comodin, pago_comodin) VALUES (?,?,?,?,?,?)",
+            LOTERIAS_CATALOGO,
+        )
+        cur.execute("SELECT id FROM loterias WHERE nombre = 'LA GRANJITA'")
+        loteria_id = cur.fetchone()[0]
+        cur.execute("INSERT INTO sorteos (loteria_id, hora) VALUES (?, ?)", (loteria_id, "15:00"))
+        con.commit()
+        print(f"Base de datos inicializada con {len(LOTERIAS_CATALOGO)} loterías.")
+    con.close()
+
+
 app = Flask(__name__)
+inicializar_si_hace_falta()
 
 
 def get_db():
