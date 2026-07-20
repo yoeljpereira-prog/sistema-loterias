@@ -179,6 +179,68 @@ def demo_seed():
     })
 
 
+@app.post("/tickets/<int:ticket_id>/anular")
+def anular_ticket(ticket_id):
+    db = get_db()
+    ticket = db.execute(
+        "SELECT id, agencia_id, estado, vendido_en FROM tickets WHERE id = ?", (ticket_id,)
+    ).fetchone()
+    if ticket is None:
+        return jsonify({"error": "Ticket no encontrado"}), 404
+    if ticket["estado"] != "vigente":
+        return jsonify({"error": f"Este ticket ya está {ticket['estado']}, no se puede anular"}), 409
+
+    agencia = db.execute(
+        "SELECT tiempo_anulacion_min FROM agencias WHERE id = ?", (ticket["agencia_id"],)
+    ).fetchone()
+    minutos_limite = agencia["tiempo_anulacion_min"] if agencia else 5
+
+    vendido_en = datetime.fromisoformat(ticket["vendido_en"])
+    limite = vendido_en + timedelta(minutes=minutos_limite)
+    if datetime.now() > limite:
+        return jsonify({"error": f"Ya pasaron los {minutos_limite} minutos permitidos para anular"}), 409
+
+    db.execute("UPDATE tickets SET estado = 'anulado' WHERE id = ?", (ticket_id,))
+    db.commit()
+    return jsonify({"ok": True, "mensaje": "Ticket anulado"})
+
+
+@app.post("/tickets/pagar")
+def pagar_ticket():
+    """Paga un ticket ganador. Pide número de ticket + serial (el serial
+    solo aparece en el papel impreso, es la validación de seguridad)."""
+    data = request.get_json()
+    numero_ticket = data.get("numero_ticket", "")
+    serial = data.get("serial", "")
+
+    db = get_db()
+    ticket = db.execute(
+        "SELECT id, estado FROM tickets WHERE numero_ticket = ? AND serial = ?",
+        (numero_ticket, serial),
+    ).fetchone()
+    if ticket is None:
+        return jsonify({"error": "Número de ticket o serial incorrecto"}), 404
+    if ticket["estado"] == "anulado":
+        return jsonify({"error": "Este ticket fue anulado"}), 409
+    if ticket["estado"] == "pagado":
+        return jsonify({"error": "Este ticket ya fue pagado"}), 409
+
+    jugadas_ganadoras = db.execute(
+        "SELECT id, premio FROM jugadas WHERE ticket_id = ? AND estado = 'ganador' AND premio_pagado = 0",
+        (ticket["id"],),
+    ).fetchall()
+    if not jugadas_ganadoras:
+        return jsonify({"error": "Este ticket no tiene premios pendientes por pagar"}), 409
+
+    total_pagado = sum(j["premio"] for j in jugadas_ganadoras)
+    for j in jugadas_ganadoras:
+        db.execute("UPDATE jugadas SET premio_pagado = 1 WHERE id = ?", (j["id"],))
+    db.execute("UPDATE tickets SET estado = 'pagado' WHERE id = ?", (ticket["id"],))
+    db.commit()
+
+    return jsonify({"ok": True, "total_pagado": total_pagado, "jugadas_pagadas": len(jugadas_ganadoras)})
+
+
 @app.get("/")
 def inicio():
     return jsonify({"mensaje": "Sistema de Loterías funcionando", "estado": "ok"})
