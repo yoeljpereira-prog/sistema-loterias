@@ -98,6 +98,25 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+@app.get("/demo/sorteo_prueba")
+def demo_sorteo_prueba():
+    """
+    Endpoint TEMPORAL: crea (o reutiliza) un sorteo de LA GRANJITA a
+    las 23:59, para poder probar ventas sin importar la hora real.
+    """
+    db = get_db()
+    existente = db.execute(
+        "SELECT s.id FROM sorteos s JOIN loterias l ON l.id = s.loteria_id WHERE l.nombre = 'LA GRANJITA' AND s.hora = '23:59'"
+    ).fetchone()
+    if existente:
+        return jsonify({"sorteo_id": existente["id"], "mensaje": "Ya existía, reutilizado"})
+
+    loteria = db.execute("SELECT id FROM loterias WHERE nombre = 'LA GRANJITA'").fetchone()
+    cur = db.execute("INSERT INTO sorteos (loteria_id, hora) VALUES (?, '23:59')", (loteria["id"],))
+    db.commit()
+    return jsonify({"sorteo_id": cur.lastrowid, "mensaje": "Sorteo de prueba creado (cierra a las 23:59)"})
+
+
 @app.get("/demo/seed")
 def demo_seed():
     """
