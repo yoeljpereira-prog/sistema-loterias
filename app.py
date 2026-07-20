@@ -159,13 +159,6 @@ def demo_seed():
         "agencia_id": agencia_id,
     })
 
-Guarda con "Commit changes", espera 2-3 minutos a que Render vuelva a desplegar, y avísame cuando esté listo.
-
-Mientras tanto, descarga el archivo probador_sistema.html que te acabo de compartir arriba — ábrelo haciendo doble clic (se abre directo en tu navegador, no necesita servidor). Ahí vas a pegar la dirección de tu servidor de Render arriba del todo, y luego ir presionando los botones en orden: 1, 2, 3, 4, 5, 6.
-
-Probador sistema
-Código · HTML 
-
 
 @app.get("/")
 def inicio():
