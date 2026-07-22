@@ -295,6 +295,22 @@ def login():
     return jsonify({"usuario_id": row["id"], "nombre": row["nombre"], "rol": row["rol"]})
 
 
+@app.get("/cajas/mi")
+def mi_caja():
+    usuario_id = request.args.get("usuario_id")
+    db = get_db()
+    row = uno(
+        db,
+        """SELECT c.id AS caja_id, c.nombre_caja, c.agencia_id, a.nombre AS agencia_nombre
+           FROM cajas c JOIN agencias a ON a.id = c.agencia_id
+           WHERE c.usuario_id = %s""",
+        (usuario_id,),
+    )
+    if row is None:
+        return jsonify({"error": "No se encontró una caja para este usuario"}), 404
+    return jsonify(dict(row))
+
+
 @app.get("/loterias")
 def listar_loterias():
     db = get_db()
