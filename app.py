@@ -128,6 +128,90 @@ def ejecutar(db, sql, params=()):
     return cur
 
 
+@app.get("/banqueros/mi")
+def mi_banquero():
+    usuario_id = request.args.get("usuario_id")
+    db = get_db()
+    row = uno(db, "SELECT * FROM banqueros WHERE usuario_id = %s", (usuario_id,))
+    if row is None:
+        return jsonify({"error": "No se encontró un banquero para este usuario"}), 404
+    return jsonify(dict(row))
+
+
+@app.get("/banqueros/<int:banquero_id>/agencias")
+def agencias_de_banquero(banquero_id):
+    db = get_db()
+    agencias = todos(
+        db,
+        """SELECT a.id, a.nombre, a.comision_pct, a.activa, u.nombre AS admin_nombre
+           FROM agencias a JOIN usuarios u ON u.id = a.usuario_admin_id
+           WHERE a.banquero_id = %s ORDER BY a.id""",
+        (banquero_id,),
+    )
+    resultado = []
+    for ag in agencias:
+        fila = uno(
+            db,
+            """SELECT COALESCE(SUM(t.total), 0) AS ventas,
+                      COALESCE(SUM(j.premio) FILTER (WHERE j.estado = 'ganador'), 0) AS premios
+               FROM tickets t LEFT JOIN jugadas j ON j.ticket_id = t.id
+               WHERE t.agencia_id = %s""",
+            (ag["id"],),
+        )
+        ventas = float(fila["ventas"])
+        premios = float(fila["premios"])
+        comision = ventas * float(ag["comision_pct"]) / 100
+        resultado.append({
+            "id": ag["id"], "nombre": ag["nombre"], "admin_nombre": ag["admin_nombre"],
+            "comision_pct": float(ag["comision_pct"]), "activa": bool(ag["activa"]),
+            "ventas": ventas, "premios": premios, "comision": comision,
+            "total": ventas - comision - premios,
+        })
+    return jsonify(resultado)
+
+
+@app.post("/agencias")
+def crear_agencia():
+    data = request.get_json()
+    db = get_db()
+    clave_hash = hash_password(data["password"])
+    cur = ejecutar(
+        db,
+        "INSERT INTO usuarios (nombre, usuario, password_hash, rol) VALUES (%s,%s,%s,'agencia') RETURNING id",
+        (data["admin_nombre"], data["admin_usuario"], clave_hash),
+    )
+    usuario_admin_id = cur.fetchone()["id"]
+    cur = ejecutar(
+        db,
+        "INSERT INTO agencias (banquero_id, usuario_admin_id, nombre, comision_pct) VALUES (%s,%s,%s,%s) RETURNING id",
+        (data["banquero_id"], usuario_admin_id, data["nombre"], data["comision_pct"]),
+    )
+    return jsonify({"agencia_id": cur.fetchone()["id"]}), 201
+
+
+@app.post("/agencias/<int:agencia_id>/actualizar")
+def actualizar_agencia(agencia_id):
+    data = request.get_json()
+    db = get_db()
+    ejecutar(
+        db,
+        "UPDATE agencias SET nombre = %s, comision_pct = %s WHERE id = %s",
+        (data["nombre"], data["comision_pct"], agencia_id),
+    )
+    return jsonify({"ok": True})
+
+
+@app.post("/agencias/<int:agencia_id>/activar")
+def activar_agencia(agencia_id):
+    db = get_db()
+    ag = uno(db, "SELECT activa FROM agencias WHERE id = %s", (agencia_id,))
+    if ag is None:
+        return jsonify({"error": "Agencia no encontrada"}), 404
+    nuevo = 0 if ag["activa"] else 1
+    ejecutar(db, "UPDATE agencias SET activa = %s WHERE id = %s", (nuevo, agencia_id))
+    return jsonify({"ok": True, "activa": bool(nuevo)})
+
+
 @app.get("/agencias/mi")
 def mi_agencia():
     usuario_id = request.args.get("usuario_id")
