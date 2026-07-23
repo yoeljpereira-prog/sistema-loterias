@@ -318,24 +318,22 @@ def actualizar_servicio_resultados(agencia_id):
 
 
 @app.post("/ventas/tripleta")
+@app.post("/ventas/tripleta")
 def crear_venta_tripleta():
     data = request.get_json()
     caja_id = data["caja_id"]
-    loteria_ids = data["loteria_ids"]  # ahora es una lista, ej. [3, 4]
     moneda = data["moneda"]
-    combos = data["combos"]  # [{numeros: ["09","18","20"], monto: 3}]
+    jugadas_pedidas = data["jugadas"]  # [{loteria_id, numeros: ["09","18","20"], monto}]
 
-    if not combos:
-        return jsonify({"error": "El ticket no tiene combinaciones"}), 400
-    if not loteria_ids:
-        return jsonify({"error": "Selecciona al menos una lotería"}), 400
+    if not jugadas_pedidas:
+        return jsonify({"error": "El ticket no tiene jugadas"}), 400
 
     db = get_db()
     caja = uno(db, "SELECT agencia_id FROM cajas WHERE id = %s", (caja_id,))
     if caja is None:
         return jsonify({"error": "Caja no encontrada"}), 404
 
-    total = sum(c["monto"] for c in combos) * len(loteria_ids)
+    total = sum(j["monto"] for j in jugadas_pedidas)
     numero_ticket = str(secrets.randbelow(90000000) + 10000000)
     serial = str(secrets.randbelow(900000000) + 100000000)
     ahora = datetime.now()
@@ -353,15 +351,14 @@ def crear_venta_tripleta():
     )
     ticket_id = cur.fetchone()["id"]
 
-    for loteria_id in loteria_ids:
-        for c in combos:
-            numero_jugado = "-".join(c["numeros"])
-            ejecutar(
-                db,
-                """INSERT INTO jugadas (ticket_id, sorteo_id, loteria_id, tipo_jugada, numero_jugado, monto)
-                   VALUES (%s, NULL, %s, 'tripleta', %s, %s)""",
-                (ticket_id, loteria_id, numero_jugado, c["monto"]),
-            )
+    for j in jugadas_pedidas:
+        numero_jugado = "-".join(j["numeros"])
+        ejecutar(
+            db,
+            """INSERT INTO jugadas (ticket_id, sorteo_id, loteria_id, tipo_jugada, numero_jugado, monto)
+               VALUES (%s, NULL, %s, 'tripleta', %s, %s)""",
+            (ticket_id, j["loteria_id"], numero_jugado, j["monto"]),
+        )
 
     return jsonify({
         "ticket_id": ticket_id, "numero_ticket": numero_ticket, "serial": serial,
