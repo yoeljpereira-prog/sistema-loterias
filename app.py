@@ -844,6 +844,29 @@ def anular_ticket(ticket_id):
     return jsonify({"ok": True, "mensaje": "Ticket anulado"})
 
 
+@app.post("/tickets/anular")
+def anular_ticket_por_numero():
+    """Igual que arriba, pero buscando el ticket por su número (N/T),
+    que es lo único que conoce el vendedor en la práctica."""
+    data = request.get_json()
+    db = get_db()
+    ticket = uno(db, "SELECT id, agencia_id, estado, vendido_en FROM tickets WHERE numero_ticket = %s", (data.get("numero_ticket", ""),))
+    if ticket is None:
+        return jsonify({"error": "Ticket no encontrado"}), 404
+    if ticket["estado"] != "vigente":
+        return jsonify({"error": f"Este ticket ya está {ticket['estado']}, no se puede anular"}), 409
+
+    agencia = uno(db, "SELECT tiempo_anulacion_min FROM agencias WHERE id = %s", (ticket["agencia_id"],))
+    minutos_limite = agencia["tiempo_anulacion_min"] if agencia else 5
+
+    limite = ticket["vendido_en"] + timedelta(minutes=minutos_limite)
+    if datetime.now() > limite:
+        return jsonify({"error": f"Ya pasaron los {minutos_limite} minutos permitidos para anular"}), 409
+
+    ejecutar(db, "UPDATE tickets SET estado = 'anulado' WHERE id = %s", (ticket["id"],))
+    return jsonify({"ok": True, "mensaje": "Ticket anulado"})
+
+
 @app.post("/tickets/pagar")
 def pagar_ticket():
     data = request.get_json()
