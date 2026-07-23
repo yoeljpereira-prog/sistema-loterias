@@ -212,6 +212,108 @@ def activar_agencia(agencia_id):
     return jsonify({"ok": True, "activa": bool(nuevo)})
 
 
+@app.get("/banqueros")
+def listar_banqueros():
+    db = get_db()
+    banqueros = todos(
+        db,
+        """SELECT b.id, b.comision_sistema_pct, b.afiliacion_pagada, b.activo, u.nombre
+           FROM banqueros b JOIN usuarios u ON u.id = b.usuario_id ORDER BY b.id""",
+    )
+    resultado = []
+    for b in banqueros:
+        fila = uno(
+            db,
+            """SELECT COALESCE(SUM(t.total), 0) AS ventas
+               FROM tickets t JOIN agencias a ON a.id = t.agencia_id
+               WHERE a.banquero_id = %s""",
+            (b["id"],),
+        )
+        num_agencias = uno(db, "SELECT COUNT(*) AS n FROM agencias WHERE banquero_id = %s", (b["id"],))
+        resultado.append({
+            "id": b["id"], "nombre": b["nombre"], "comision_sistema_pct": float(b["comision_sistema_pct"]),
+            "afiliacion_pagada": float(b["afiliacion_pagada"] or 0), "activo": bool(b["activo"]),
+            "ventas": float(fila["ventas"]), "agencias": num_agencias["n"],
+        })
+    return jsonify(resultado)
+
+
+@app.post("/banqueros")
+def crear_banquero():
+    data = request.get_json()
+    db = get_db()
+    clave_hash = hash_password(data["password"])
+    cur = ejecutar(
+        db,
+        "INSERT INTO usuarios (nombre, usuario, password_hash, rol) VALUES (%s,%s,%s,'banquero') RETURNING id",
+        (data["nombre"], data["usuario"], clave_hash),
+    )
+    usuario_id = cur.fetchone()["id"]
+    cur = ejecutar(
+        db,
+        "INSERT INTO banqueros (usuario_id, comision_sistema_pct, afiliacion_pagada) VALUES (%s,%s,%s) RETURNING id",
+        (usuario_id, data["comision_sistema_pct"], data.get("afiliacion_pagada", 0)),
+    )
+    return jsonify({"banquero_id": cur.fetchone()["id"]}), 201
+
+
+@app.post("/banqueros/<int:banquero_id>/actualizar")
+def actualizar_banquero(banquero_id):
+    data = request.get_json()
+    db = get_db()
+    ejecutar(db, "UPDATE banqueros SET comision_sistema_pct = %s WHERE id = %s", (data["comision_sistema_pct"], banquero_id))
+    return jsonify({"ok": True})
+
+
+@app.post("/banqueros/<int:banquero_id>/activar")
+def activar_banquero(banquero_id):
+    db = get_db()
+    b = uno(db, "SELECT activo FROM banqueros WHERE id = %s", (banquero_id,))
+    if b is None:
+        return jsonify({"error": "Banquero no encontrado"}), 404
+    nuevo = 0 if b["activo"] else 1
+    ejecutar(db, "UPDATE banqueros SET activo = %s WHERE id = %s", (nuevo, banquero_id))
+    return jsonify({"ok": True, "activo": bool(nuevo)})
+
+
+@app.get("/master/agencias")
+def todas_las_agencias():
+    db = get_db()
+    rows = todos(
+        db,
+        """SELECT a.id, a.nombre, a.activa, a.servicio_resultados_activo, a.quien_carga_resultados,
+                  a.comision_resultados_pct, u.nombre AS banquero_nombre
+           FROM agencias a
+           JOIN banqueros b ON b.id = a.banquero_id
+           JOIN usuarios u ON u.id = b.usuario_id
+           ORDER BY a.id""",
+    )
+    resultado = []
+    for r in rows:
+        fila = uno(db, "SELECT COALESCE(SUM(total), 0) AS ventas FROM tickets WHERE agencia_id = %s", (r["id"],))
+        d = dict(r)
+        d["ventas"] = float(fila["ventas"])
+        resultado.append(d)
+    return jsonify(resultado)
+
+
+@app.post("/agencias/<int:agencia_id>/servicio")
+def actualizar_servicio_resultados(agencia_id):
+    data = request.get_json()
+    db = get_db()
+    campos = []
+    valores = []
+    for campo in ("servicio_resultados_activo", "quien_carga_resultados", "comision_resultados_pct"):
+        if campo in data:
+            campos.append(f"{campo} = %s")
+            valores.append(data[campo])
+    if not campos:
+        return jsonify({"error": "Nada que actualizar"}), 400
+    valores.append(agencia_id)
+    ejecutar(db, f"UPDATE agencias SET {', '.join(campos)} WHERE id = %s", tuple(valores))
+    return jsonify({"ok": True})
+
+
 @app.get("/agencias/mi")
 def mi_agencia():
     usuario_id = request.args.get("usuario_id")
