@@ -18,7 +18,7 @@ LOTERIAS_CATALOGO = [
     ("LA GRANJITA", 38, 30, 0, None, None),
     ("SELVA PLUS", 38, 30, 0, None, None),
     ("GUACHARO ACTIVO", 77, 60, 0, "75", 120),
-    ("GUACHARITO MILLONARIO", 102, 70, 5, "99", 140),
+    ("GUACHARITO MILLONARIO", 101, 70, 5, "99", 140),
     ("CHANCE ANIMALITO", 38, 30, 0, None, None),
     ("LOTTOREY", 38, 30, 0, None, None),
     ("LOTTOINTERNACIONAL", 38, 30, 0, None, None),
