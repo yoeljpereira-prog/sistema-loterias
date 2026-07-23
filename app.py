@@ -143,7 +143,7 @@ def agencias_de_banquero(banquero_id):
     db = get_db()
     agencias = todos(
         db,
-        """SELECT a.id, a.nombre, a.comision_pct, a.activa, u.nombre AS admin_nombre
+        """SELECT a.id, a.nombre, a.comision_pct, a.activa, a.monto_minimo_jugada, u.nombre AS admin_nombre
            FROM agencias a JOIN usuarios u ON u.id = a.usuario_admin_id
            WHERE a.banquero_id = %s ORDER BY a.id""",
         (banquero_id,),
@@ -164,6 +164,7 @@ def agencias_de_banquero(banquero_id):
         resultado.append({
             "id": ag["id"], "nombre": ag["nombre"], "admin_nombre": ag["admin_nombre"],
             "comision_pct": float(ag["comision_pct"]), "activa": bool(ag["activa"]),
+            "monto_minimo_jugada": float(ag["monto_minimo_jugada"] or 0),
             "ventas": ventas, "premios": premios, "comision": comision,
             "total": ventas - comision - premios,
         })
