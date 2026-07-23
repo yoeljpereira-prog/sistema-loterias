@@ -321,19 +321,21 @@ def actualizar_servicio_resultados(agencia_id):
 def crear_venta_tripleta():
     data = request.get_json()
     caja_id = data["caja_id"]
-    loteria_id = data["loteria_id"]
+    loteria_ids = data["loteria_ids"]  # ahora es una lista, ej. [3, 4]
     moneda = data["moneda"]
     combos = data["combos"]  # [{numeros: ["09","18","20"], monto: 3}]
 
     if not combos:
         return jsonify({"error": "El ticket no tiene combinaciones"}), 400
+    if not loteria_ids:
+        return jsonify({"error": "Selecciona al menos una lotería"}), 400
 
     db = get_db()
     caja = uno(db, "SELECT agencia_id FROM cajas WHERE id = %s", (caja_id,))
     if caja is None:
         return jsonify({"error": "Caja no encontrada"}), 404
 
-    total = sum(c["monto"] for c in combos)
+    total = sum(c["monto"] for c in combos) * len(loteria_ids)
     numero_ticket = str(secrets.randbelow(90000000) + 10000000)
     serial = str(secrets.randbelow(900000000) + 100000000)
     ahora = datetime.now()
@@ -345,21 +347,21 @@ def crear_venta_tripleta():
     cur = ejecutar(
         db,
         """INSERT INTO tickets (agencia_id, caja_id, numero_ticket, serial, moneda, total, vence_en,
-                                 tipo_venta, loteria_id, runlot, desde, hasta)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,'tripleta',%s,%s,%s,%s) RETURNING id""",
-        (caja["agencia_id"], caja_id, numero_ticket, serial, moneda, total, vence_en,
-         loteria_id, runlot, desde, hasta),
+                                 tipo_venta, runlot, desde, hasta)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,'tripleta',%s,%s,%s) RETURNING id""",
+        (caja["agencia_id"], caja_id, numero_ticket, serial, moneda, total, vence_en, runlot, desde, hasta),
     )
     ticket_id = cur.fetchone()["id"]
 
-    for c in combos:
-        numero_jugado = "-".join(c["numeros"])
-        ejecutar(
-            db,
-            """INSERT INTO jugadas (ticket_id, sorteo_id, loteria_id, tipo_jugada, numero_jugado, monto)
-               VALUES (%s, NULL, %s, 'tripleta', %s, %s)""",
-            (ticket_id, loteria_id, numero_jugado, c["monto"]),
-        )
+    for loteria_id in loteria_ids:
+        for c in combos:
+            numero_jugado = "-".join(c["numeros"])
+            ejecutar(
+                db,
+                """INSERT INTO jugadas (ticket_id, sorteo_id, loteria_id, tipo_jugada, numero_jugado, monto)
+                   VALUES (%s, NULL, %s, 'tripleta', %s, %s)""",
+                (ticket_id, loteria_id, numero_jugado, c["monto"]),
+            )
 
     return jsonify({
         "ticket_id": ticket_id, "numero_ticket": numero_ticket, "serial": serial,
@@ -371,32 +373,35 @@ def crear_venta_tripleta():
 @app.post("/tickets/<int:ticket_id>/verificar-tripleta")
 def verificar_tripleta(ticket_id):
     db = get_db()
-    ticket = uno(db, "SELECT id, loteria_id, desde, hasta FROM tickets WHERE id = %s AND tipo_venta = 'tripleta'", (ticket_id,))
+    ticket = uno(db, "SELECT id, desde, hasta FROM tickets WHERE id = %s AND tipo_venta = 'tripleta'", (ticket_id,))
     if ticket is None:
         return jsonify({"error": "Ticket de tripleta no encontrado"}), 404
 
-    loteria = uno(db, "SELECT pago_normal FROM loterias WHERE id = %s", (ticket["loteria_id"],))
-    pago = float(loteria["pago_normal"])
-
-    # Números que salieron ganadores dentro de la ventana de este ticket
-    ganadores = todos(
-        db,
-        """SELECT DISTINCT r.numero_ganador
-           FROM resultados r JOIN sorteos s ON s.id = r.sorteo_id
-           WHERE s.loteria_id = %s AND r.estado = 'procesado'
-             AND (r.fecha || ' ' || s.hora)::timestamp BETWEEN %s AND %s""",
-        (ticket["loteria_id"], ticket["desde"], ticket["hasta"]),
-    )
-    set_ganadores = {g["numero_ganador"] for g in ganadores}
     ventana_cerrada = datetime.now() > ticket["hasta"]
+    jugadas_ticket = todos(db, "SELECT id, loteria_id, numero_jugado, monto, estado FROM jugadas WHERE ticket_id = %s", (ticket_id,))
 
-    jugadas_ticket = todos(db, "SELECT id, numero_jugado, monto, estado FROM jugadas WHERE ticket_id = %s", (ticket_id,))
+    ganadores_por_loteria = {}
+    pago_por_loteria = {}
     resumen = []
     for j in jugadas_ticket:
+        lot_id = j["loteria_id"]
+        if lot_id not in ganadores_por_loteria:
+            fila_pago = uno(db, "SELECT pago_normal FROM loterias WHERE id = %s", (lot_id,))
+            pago_por_loteria[lot_id] = float(fila_pago["pago_normal"])
+            filas = todos(
+                db,
+                """SELECT DISTINCT r.numero_ganador
+                   FROM resultados r JOIN sorteos s ON s.id = r.sorteo_id
+                   WHERE s.loteria_id = %s AND r.estado = 'procesado'
+                     AND (r.fecha || ' ' || s.hora)::timestamp BETWEEN %s AND %s""",
+                (lot_id, ticket["desde"], ticket["hasta"]),
+            )
+            ganadores_por_loteria[lot_id] = {f["numero_ganador"] for f in filas}
+
         numeros = j["numero_jugado"].split("-")
-        acierta_todos = all(n in set_ganadores for n in numeros)
+        acierta_todos = all(n in ganadores_por_loteria[lot_id] for n in numeros)
         if acierta_todos and j["estado"] == "pendiente":
-            premio = j["monto"] * pago
+            premio = j["monto"] * pago_por_loteria[lot_id]
             ejecutar(db, "UPDATE jugadas SET estado = 'ganador', premio = %s WHERE id = %s", (premio, j["id"]))
             estado_final = "ganador"
         elif not acierta_todos and ventana_cerrada and j["estado"] == "pendiente":
@@ -404,7 +409,7 @@ def verificar_tripleta(ticket_id):
             estado_final = "perdedor"
         else:
             estado_final = j["estado"]
-        resumen.append({"numero_jugado": j["numero_jugado"], "estado": estado_final})
+        resumen.append({"loteria_id": lot_id, "numero_jugado": j["numero_jugado"], "estado": estado_final})
 
     return jsonify({"ventana_cerrada": ventana_cerrada, "jugadas": resumen})
 
