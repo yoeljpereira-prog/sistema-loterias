@@ -194,11 +194,13 @@ def crear_agencia():
 def actualizar_agencia(agencia_id):
     data = request.get_json()
     db = get_db()
-    ejecutar(
-        db,
-        "UPDATE agencias SET nombre = %s, comision_pct = %s WHERE id = %s",
-        (data["nombre"], data["comision_pct"], agencia_id),
-    )
+    campos = ["nombre = %s", "comision_pct = %s"]
+    valores = [data["nombre"], data["comision_pct"]]
+    if "monto_minimo_jugada" in data:
+        campos.append("monto_minimo_jugada = %s")
+        valores.append(data["monto_minimo_jugada"])
+    valores.append(agencia_id)
+    ejecutar(db, f"UPDATE agencias SET {', '.join(campos)} WHERE id = %s", tuple(valores))
     return jsonify({"ok": True})
 
 
@@ -645,6 +647,13 @@ def crear_venta():
     caja = uno(db, "SELECT agencia_id FROM cajas WHERE id = %s", (caja_id,))
     if caja is None:
         return jsonify({"error": "Caja no encontrada"}), 404
+
+    agencia = uno(db, "SELECT monto_minimo_jugada FROM agencias WHERE id = %s", (caja["agencia_id"],))
+    minimo = float(agencia["monto_minimo_jugada"] or 0) if agencia else 0
+    if minimo > 0:
+        for j in jugadas:
+            if j["monto"] < minimo:
+                return jsonify({"error": f"El monto mínimo por jugada es {minimo}"}), 409
 
     for j in jugadas:
         error_bloqueo = _validar_bloqueos_y_limites(db, caja["agencia_id"], j["sorteo_id"], j["numero_jugado"], j["monto"])
