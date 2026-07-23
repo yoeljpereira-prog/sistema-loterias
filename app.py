@@ -5,6 +5,7 @@ import secrets
 import hashlib
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, g
 import psycopg2
 import psycopg2.extras
@@ -12,6 +13,15 @@ import psycopg2.extras
 from motor_premios import procesar_resultado, reversar_resultado
 
 DATABASE_URL = os.environ["DATABASE_URL"]
+
+# Los horarios de sorteo están pensados en hora de Venezuela. El servidor de
+# Render corre en UTC, así que SIEMPRE hay que usar esta función para
+# comparar/guardar fechas y horas relacionadas con sorteos, ventas, etc.
+TZ_VENEZUELA = ZoneInfo("America/Caracas")
+
+
+def ahora_local():
+    return datetime.now(TZ_VENEZUELA).replace(tzinfo=None)
 
 LOTERIAS_CATALOGO = [
     ("LOTTO ACTIVO", 38, 30, 0, None, None),
@@ -318,7 +328,6 @@ def actualizar_servicio_resultados(agencia_id):
 
 
 @app.post("/ventas/tripleta")
-@app.post("/ventas/tripleta")
 def crear_venta_tripleta():
     data = request.get_json()
     caja_id = data["caja_id"]
@@ -336,7 +345,7 @@ def crear_venta_tripleta():
     total = sum(j["monto"] for j in jugadas_pedidas)
     numero_ticket = str(secrets.randbelow(90000000) + 10000000)
     serial = str(secrets.randbelow(900000000) + 100000000)
-    ahora = datetime.now()
+    ahora = ahora_local()
     desde = ahora
     hasta = ahora + timedelta(hours=11)  # aproximación: 11 sorteos consecutivos ~ 11 horas
     vence_en = ahora + timedelta(days=3)
@@ -344,10 +353,10 @@ def crear_venta_tripleta():
 
     cur = ejecutar(
         db,
-        """INSERT INTO tickets (agencia_id, caja_id, numero_ticket, serial, moneda, total, vence_en,
+        """INSERT INTO tickets (agencia_id, caja_id, numero_ticket, serial, moneda, total, vendido_en, vence_en,
                                  tipo_venta, runlot, desde, hasta)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,'tripleta',%s,%s,%s) RETURNING id""",
-        (caja["agencia_id"], caja_id, numero_ticket, serial, moneda, total, vence_en, runlot, desde, hasta),
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'tripleta',%s,%s,%s) RETURNING id""",
+        (caja["agencia_id"], caja_id, numero_ticket, serial, moneda, total, ahora, vence_en, runlot, desde, hasta),
     )
     ticket_id = cur.fetchone()["id"]
 
@@ -374,7 +383,7 @@ def verificar_tripleta(ticket_id):
     if ticket is None:
         return jsonify({"error": "Ticket de tripleta no encontrado"}), 404
 
-    ventana_cerrada = datetime.now() > ticket["hasta"]
+    ventana_cerrada = ahora_local() > ticket["hasta"]
     jugadas_ticket = todos(db, "SELECT id, loteria_id, numero_jugado, monto, estado FROM jugadas WHERE ticket_id = %s", (ticket_id,))
 
     ganadores_por_loteria = {}
@@ -717,7 +726,7 @@ def _sorteo_esta_abierto(db, sorteo_id):
     sorteo = uno(db, "SELECT hora, minutos_cierre_antes FROM sorteos WHERE id = %s", (sorteo_id,))
     if sorteo is None:
         return False
-    ahora = datetime.now()
+    ahora = ahora_local()
     hora_sorteo = datetime.strptime(sorteo["hora"], "%H:%M").replace(year=ahora.year, month=ahora.month, day=ahora.day)
     cierre = hora_sorteo - timedelta(minutes=sorteo["minutos_cierre_antes"])
     return ahora < cierre
@@ -736,7 +745,7 @@ def crear_venta():
     db = get_db()
     for j in jugadas:
         if not _sorteo_esta_abierto(db, j["sorteo_id"]):
-            return jsonify({"error": f"El sorteo {j['sorteo_id']} ya cerró la venta"}), 409
+            return jsonify({"error": "Sorteos Cerrados"}), 409
 
     caja = uno(db, "SELECT agencia_id FROM cajas WHERE id = %s", (caja_id,))
     if caja is None:
@@ -757,13 +766,14 @@ def crear_venta():
     total = sum(j["monto"] for j in jugadas)
     numero_ticket = str(secrets.randbelow(90000000) + 10000000)
     serial = str(secrets.randbelow(900000000) + 100000000)
-    vence_en = datetime.now() + timedelta(days=3)
+    vendido_en = ahora_local()
+    vence_en = vendido_en + timedelta(days=3)
 
     cur = ejecutar(
         db,
-        """INSERT INTO tickets (agencia_id, caja_id, numero_ticket, serial, moneda, total, vence_en)
-           VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-        (caja["agencia_id"], caja_id, numero_ticket, serial, moneda, total, vence_en),
+        """INSERT INTO tickets (agencia_id, caja_id, numero_ticket, serial, moneda, total, vendido_en, vence_en)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+        (caja["agencia_id"], caja_id, numero_ticket, serial, moneda, total, vendido_en, vence_en),
     )
     ticket_id = cur.fetchone()["id"]
 
@@ -799,7 +809,7 @@ def registrar_resultado():
     cur = ejecutar(
         db,
         "INSERT INTO resultados (sorteo_id, fecha, numero_ganador) VALUES (%s,%s,%s) RETURNING id",
-        (data["sorteo_id"], data.get("fecha", datetime.now().strftime("%Y-%m-%d")), data["numero_ganador"]),
+        (data["sorteo_id"], data.get("fecha", ahora_local().strftime("%Y-%m-%d")), data["numero_ganador"]),
     )
     return jsonify({"resultado_id": cur.fetchone()["id"]}), 201
 
@@ -837,7 +847,7 @@ def anular_ticket(ticket_id):
     minutos_limite = agencia["tiempo_anulacion_min"] if agencia else 5
 
     limite = ticket["vendido_en"] + timedelta(minutes=minutos_limite)
-    if datetime.now() > limite:
+    if ahora_local() > limite:
         return jsonify({"error": f"Ya pasaron los {minutos_limite} minutos permitidos para anular"}), 409
 
     ejecutar(db, "UPDATE tickets SET estado = 'anulado' WHERE id = %s", (ticket_id,))
@@ -860,7 +870,7 @@ def anular_ticket_por_numero():
     minutos_limite = agencia["tiempo_anulacion_min"] if agencia else 5
 
     limite = ticket["vendido_en"] + timedelta(minutes=minutos_limite)
-    if datetime.now() > limite:
+    if ahora_local() > limite:
         return jsonify({"error": f"Ya pasaron los {minutos_limite} minutos permitidos para anular"}), 409
 
     ejecutar(db, "UPDATE tickets SET estado = 'anulado' WHERE id = %s", (ticket["id"],))
