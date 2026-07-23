@@ -85,7 +85,7 @@ def procesar_resultado(con, resultado_id):
 
     cur.execute(
         "UPDATE resultados SET estado = 'procesado', procesado_en = %s WHERE id = %s",
-        (datetime.now(), resultado_id),
+        (ahora.local(), resultado_id),
     )
     con.commit()
 
