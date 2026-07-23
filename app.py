@@ -128,6 +128,16 @@ def ejecutar(db, sql, params=()):
     return cur
 
 
+@app.get("/agencias/mi")
+def mi_agencia():
+    usuario_id = request.args.get("usuario_id")
+    db = get_db()
+    row = uno(db, "SELECT * FROM agencias WHERE usuario_admin_id = %s", (usuario_id,))
+    if row is None:
+        return jsonify({"error": "No se encontró una agencia para este usuario"}), 404
+    return jsonify(dict(row))
+
+
 @app.get("/agencias/<int:agencia_id>")
 def info_agencia(agencia_id):
     db = get_db()
