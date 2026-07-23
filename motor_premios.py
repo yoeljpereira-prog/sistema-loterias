@@ -8,6 +8,13 @@ Misma lógica que ya probamos con SQLite, adaptada a psycopg2:
 """
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+TZ_VENEZUELA = ZoneInfo("America/Caracas")
+
+
+def ahora_local():
+    return datetime.now(TZ_VENEZUELA).replace(tzinfo=None)
 
 
 def procesar_resultado(con, resultado_id):
