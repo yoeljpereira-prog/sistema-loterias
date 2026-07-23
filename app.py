@@ -128,6 +128,97 @@ def ejecutar(db, sql, params=()):
     return cur
 
 
+@app.get("/agencias/<int:agencia_id>")
+def info_agencia(agencia_id):
+    db = get_db()
+    row = uno(db, "SELECT * FROM agencias WHERE id = %s", (agencia_id,))
+    if row is None:
+        return jsonify({"error": "Agencia no encontrada"}), 404
+    return jsonify(dict(row))
+
+
+@app.post("/cajas")
+def crear_caja():
+    data = request.get_json()
+    db = get_db()
+    clave_hash = hash_password(data["password"])
+    cur = ejecutar(
+        db,
+        "INSERT INTO usuarios (nombre, usuario, password_hash, rol) VALUES (%s,%s,%s,'caja') RETURNING id",
+        (data["nombre"], data["usuario"], clave_hash),
+    )
+    usuario_id = cur.fetchone()["id"]
+    cur = ejecutar(
+        db,
+        "INSERT INTO cajas (agencia_id, usuario_id, nombre_caja) VALUES (%s,%s,%s) RETURNING id",
+        (data["agencia_id"], usuario_id, data["nombre_caja"]),
+    )
+    return jsonify({"caja_id": cur.fetchone()["id"]}), 201
+
+
+@app.get("/agencias/<int:agencia_id>/cajas")
+def listar_cajas(agencia_id):
+    db = get_db()
+    rows = todos(
+        db,
+        """SELECT c.id AS caja_id, c.nombre_caja, c.activo, u.nombre, u.usuario
+           FROM cajas c JOIN usuarios u ON u.id = c.usuario_id
+           WHERE c.agencia_id = %s ORDER BY c.id""",
+        (agencia_id,),
+    )
+    return jsonify([dict(r) for r in rows])
+
+
+@app.post("/cajas/<int:caja_id>/activar")
+def activar_caja(caja_id):
+    db = get_db()
+    caja = uno(db, "SELECT activo FROM cajas WHERE id = %s", (caja_id,))
+    if caja is None:
+        return jsonify({"error": "Caja no encontrada"}), 404
+    nuevo_estado = 0 if caja["activo"] else 1
+    ejecutar(db, "UPDATE cajas SET activo = %s WHERE id = %s", (nuevo_estado, caja_id))
+    return jsonify({"ok": True, "activo": bool(nuevo_estado)})
+
+
+@app.get("/agencias/<int:agencia_id>/reporte-cajas")
+def reporte_cajas(agencia_id):
+    db = get_db()
+    cajas = todos(
+        db,
+        """SELECT c.id AS caja_id, c.nombre_caja, u.nombre
+           FROM cajas c JOIN usuarios u ON u.id = c.usuario_id
+           WHERE c.agencia_id = %s""",
+        (agencia_id,),
+    )
+    resultado = []
+    for c in cajas:
+        fila = uno(
+            db,
+            """SELECT
+                 COALESCE(SUM(t.total), 0) AS ventas,
+                 COALESCE(SUM(j.premio) FILTER (WHERE j.estado = 'ganador'), 0) AS premios,
+                 COALESCE(SUM(j.premio) FILTER (WHERE j.premio_pagado = 1), 0) AS premios_pagados
+               FROM tickets t
+               LEFT JOIN jugadas j ON j.ticket_id = t.id
+               WHERE t.caja_id = %s""",
+            (c["caja_id"],),
+        )
+        ventas = float(fila["ventas"])
+        premios = float(fila["premios"])
+        premios_pagados = float(fila["premios_pagados"])
+        resultado.append({
+            "caja_id": c["caja_id"],
+            "nombre_caja": c["nombre_caja"],
+            "nombre": c["nombre"],
+            "ventas": ventas,
+            "premios": premios,
+            "premios_pagados": premios_pagados,
+            "premios_por_pagar": premios - premios_pagados,
+            "total": ventas - premios_pagados,
+        })
+    return jsonify(resultado)
+
+
 @app.get("/demo/sorteo_prueba")
 def demo_sorteo_prueba():
     db = get_db()
